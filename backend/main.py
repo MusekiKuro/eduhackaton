@@ -15,7 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import PyPDF2
-from openai import OpenAI
+# ИСПОЛЬЗУЕМ КЛИЕНТ GEMINI
+from google import genai
 from dotenv import load_dotenv
 
 # Загрузка переменных окружения
@@ -37,8 +38,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Инициализация OpenAI клиента
-openai_client = OpenAI(api_key=os.getenv("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"))
+# Инициализация Gemini клиента
+# Используем переменную GEMINI_API_KEY
+# Инициализация Gemini клиента
+gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # In-Memory Database
 DEMO_DB = {
@@ -74,24 +77,27 @@ def extract_text_from_pdf(file_content: bytes) -> str:
             text += page.extract_text() + "\n"
         return text.strip()
     except Exception as e:
+        # Убедитесь, что PyPDF2 установлен.
         raise HTTPException(status_code=400, detail=f"Ошибка при чтении PDF: {str(e)}")
 
 def generate_ai_response(prompt: str, context: str = "") -> str:
-    """Генерация ответа с помощью OpenAI GPT"""
+    """Генерация ответа с помощью Google Gemini"""
     try:
         full_prompt = f"{context}\n\n{prompt}" if context else prompt
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Ты - помощник для обучения. Отвечай кратко и понятно."},
+
+        # Вызов Gemini API
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",  # Используем быструю модель
+            contents=[
                 {"role": "user", "content": full_prompt}
-            ],
-            max_tokens=500,
-            temperature=0.7
+            ]
         )
-        return response.choices[0].message.content.strip()
+
+        # Ответ Gemini находится в поле response.text
+        return response.text.strip()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+        # Обновленное сообщение об ошибке
+        raise HTTPException(status_code=500, detail=f"Ошибка AI (Gemini): {str(e)}")
 
 # API Endpoints
 
@@ -125,20 +131,20 @@ async def upload_material(file: UploadFile = File(...)):
         # Проверка формата файла
         if file.content_type not in ["application/pdf", "text/plain"]:
             raise HTTPException(status_code=400, detail="Поддерживаются только PDF и TXT файлы")
-        
+
         # Чтение файла
         content = await file.read()
-        
+
         # Извлечение текста
         if file.content_type == "application/pdf":
             text_content = extract_text_from_pdf(content)
         else:
             text_content = content.decode("utf-8")
-        
+
         # Проверка длины текста
         if len(text_content) < 10:
             raise HTTPException(status_code=400, detail="Файл слишком маленький или пустой")
-        
+
         # Создание материала
         material_id = str(uuid.uuid4())
         material = {
@@ -149,17 +155,17 @@ async def upload_material(file: UploadFile = File(...)):
             "content_length": len(text_content),
             "created_at": datetime.now().isoformat()
         }
-        
+
         # Сохранение в БД
         DEMO_DB["materials"][material_id] = material
-        
+
         return {
             "material_id": material_id,
             "title": file.filename,
             "text_length": len(text_content),
             "message": "Материал успешно загружен"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -178,7 +184,7 @@ async def list_materials(course_id: str):
         for mat in DEMO_DB["materials"].values()
         if mat["course_id"] == course_id
     ]
-    
+
     return {
         "materials": materials,
         "count": len(materials),
@@ -193,13 +199,13 @@ async def ask_ai(request: ChatRequest):
         material = DEMO_DB["materials"].get(request.material_id)
         if not material:
             raise HTTPException(status_code=404, detail="Материал не найден")
-        
+
         # Формирование контекста
         context = f"На основе следующего материала: {material['content'][:2000]}..."
-        
+
         # Генерация ответа
         answer = generate_ai_response(request.question, context)
-        
+
         # Сохранение в историю чата
         chat_entry = {
             "material_id": request.material_id,
@@ -208,14 +214,14 @@ async def ask_ai(request: ChatRequest):
             "created_at": datetime.now().isoformat()
         }
         DEMO_DB["chat_history"].append(chat_entry)
-        
+
         return {
             "question": request.question,
             "answer": answer,
             "sources": [material["title"]],
             "timestamp": chat_entry["created_at"]
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -229,7 +235,7 @@ async def generate_test(request: TestGenerationRequest):
         material = DEMO_DB["materials"].get(request.material_id)
         if not material:
             raise HTTPException(status_code=404, detail="Материал не найден")
-        
+
         # Формирование промта для генерации вопросов
         prompt = f"""
         Создай {request.num_questions} вопросов с вариантами ответов по следующему материалу:
@@ -246,10 +252,10 @@ async def generate_test(request: TestGenerationRequest):
         ]
         Сложность: {request.difficulty}
         """
-        
+
         # Генерация вопросов
         response_text = generate_ai_response(prompt)
-        
+
         # Парсинг JSON ответа
         try:
             questions_data = json.loads(response_text)
@@ -269,7 +275,7 @@ async def generate_test(request: TestGenerationRequest):
                     "explanation": "Рассматриваются продвинутые темы в области"
                 }
             ][:request.num_questions]
-        
+
         # Создание теста
         test_id = str(uuid.uuid4())
         test = {
@@ -280,17 +286,17 @@ async def generate_test(request: TestGenerationRequest):
             "difficulty": request.difficulty,
             "created_at": datetime.now().isoformat()
         }
-        
+
         # Сохранение в БД
         DEMO_DB["tests"][test_id] = test
-        
+
         return {
             "test_id": test_id,
             "questions": questions_data,
             "difficulty": request.difficulty,
             "material_title": material["title"]
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -303,7 +309,7 @@ async def submit_answer(request: AnswerSubmission):
         # Здесь должна быть логика проверки ответа
         # Для MVP возвращаем тестовый результат
         is_correct = request.selected_answer == 0  # Упрощенная логика
-        
+
         # Сохранение результата
         result_entry = {
             "question_id": request.question_id,
@@ -312,14 +318,14 @@ async def submit_answer(request: AnswerSubmission):
             "time_spent": request.time_spent,
             "timestamp": datetime.now().isoformat()
         }
-        
+
         return {
             "is_correct": is_correct,
             "feedback": "Правильно!" if is_correct else "Неправильно, попробуйте еще раз",
             "explanation": "Это был правильный ответ, потому что...",
             "result": result_entry
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка проверки ответа: {str(e)}")
 
@@ -331,10 +337,10 @@ async def get_analytics(course_id: str):
             mat for mat in DEMO_DB["materials"].values()
             if mat["course_id"] == course_id
         ]
-        
+
         total_materials = len(materials)
         total_content_length = sum(mat["content_length"] for mat in materials)
-        
+
         return {
             "course_id": course_id,
             "total_materials": total_materials,
@@ -352,19 +358,19 @@ async def get_analytics(course_id: str):
             "tests_count": len(DEMO_DB["tests"]),
             "last_update": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка аналитики: {str(e)}")
 
 # Точка входа
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Проверка наличия API ключа
-    if not os.getenv("OPENAI_API_KEY"):
-        print("⚠️  ВНИМАНИЕ: OPENAI_API_KEY не найден в .env файле!")
-        print("   Получите ключ на https://platform.openai.com/api-keys")
-        print("   Создайте файл .env с содержимым: OPENAI_API_KEY=sk-your-key")
+    if not os.getenv("GEMINI_API_KEY"): # Проверяем новый ключ
+        print("⚠️  ВНИМАНИЕ: GEMINI_API_KEY не найден в .env файле!")
+        print("   Получите ключ на Google AI Studio")
+        print("   Создайте файл .env с содержимым: GEMINI_API_KEY=your-key")
         print()
     
     print("🚀 Запуск AI Tutor Platform...")
