@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -43,7 +43,7 @@ app.add_middleware(
 # Инициализация Gemini клиента
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# In-Memory Database
+# In-Memory Database (Упрощенная DB для демонстрации)
 DEMO_DB = {
     "materials": {},
     "tests": {},
@@ -51,7 +51,7 @@ DEMO_DB = {
     "test_results": []
 }
 
-# Pydantic модели для валидации
+# Pydantic модели для валидации (для примера убраны зависимости, т.к. в вашем коде их не было)
 class ChatRequest(BaseModel):
     material_id: str
     question: str
@@ -86,11 +86,11 @@ def generate_ai_response(prompt: str, context: str = "") -> str:
         full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
         # Вызов Gemini API
+        # ИСПРАВЛЕНИЕ ОШИБКИ ВАЛИДАЦИИ GEMINI SDK:
+        # Передаем строку напрямую в contents, а не словарь.
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",  # Используем быструю модель
-            contents=[
-                {"role": "user", "content": full_prompt}
-            ]
+            contents=full_prompt       # <--- ИСПРАВЛЕНО
         )
 
         # Ответ Gemini находится в поле response.text
@@ -100,6 +100,7 @@ def generate_ai_response(prompt: str, context: str = "") -> str:
         raise HTTPException(status_code=500, detail=f"Ошибка AI (Gemini): {str(e)}")
 
 # API Endpoints
+# Удалены неиспользуемые зависимости, чтобы код соответствовал предоставленному
 
 @app.get("/health")
 async def health_check():
